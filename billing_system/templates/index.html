@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Billing System MVP</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .section { margin-bottom: 30px; border: 1px solid #ccc; padding: 15px; border-radius: 5px; }
+        label { display: block; margin-bottom: 5px; }
+        input, select { width: 100%; padding: 8px; margin-bottom: 10px; }
+        button { padding: 10px 20px; background-color: #28a745; color: white; border: none; cursor: pointer; }
+        button:hover { background-color: #218838; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Digital Billing System MVP</h1>
+
+        <div class="section">
+            <h2>1. Create Customer</h2>
+            <form id="customerForm">
+                <label>Name:</label>
+                <input type="text" id="custName" required>
+                <label>Phone:</label>
+                <input type="text" id="custPhone" required>
+                <button type="submit">Add Customer</button>
+            </form>
+        </div>
+
+        <div class="section">
+            <h2>2. Create Product</h2>
+            <form id="productForm">
+                <label>Name:</label>
+                <input type="text" id="prodName" required>
+                <label>Price:</label>
+                <input type="number" step="0.01" id="prodPrice" required>
+                <button type="submit">Add Product</button>
+            </form>
+        </div>
+
+        <div class="section">
+            <h2>3. Create Invoice</h2>
+            <form id="invoiceForm">
+                <label>Select Customer:</label>
+                <select id="invoiceCustomer" required></select>
+
+                <label>Payment Method:</label>
+                <select id="paymentMethod" required>
+                    <option value="CASH">Cash</option>
+                    <option value="CARD">Card</option>
+                    <option value="UPI">UPI</option>
+                    <option value="WALLET">Wallet</option>
+                </select>
+
+                <h3>Add Items</h3>
+                <div style="display: flex; gap: 10px;">
+                    <select id="invoiceProduct"></select>
+                    <input type="number" id="invoiceQty" placeholder="Qty" value="1" style="width: 80px;">
+                    <button type="button" onclick="addItem()">Add to Bill</button>
+                </div>
+
+                <table id="itemsTable">
+                    <thead>
+                        <tr>
+                            <th>Product ID</th>
+                            <th>Name</th>
+                            <th>Qty</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+                <br>
+                <button type="submit">Generate Invoice</button>
+            </form>
+        </div>
+
+        <div class="section">
+            <h2>Invoices</h2>
+            <button onclick="loadInvoices()">Refresh List</button>
+            <ul id="invoiceList"></ul>
+        </div>
+    </div>
+
+    <script>
+        // Data Loaders
+        async function loadCustomers() {
+            const res = await fetch('/customers/');
+            const data = await res.json();
+            const select = document.getElementById('invoiceCustomer');
+            select.innerHTML = '';
+            // Add a default placeholder option
+            const placeholder = document.createElement('option');
+            placeholder.value = "";
+            placeholder.textContent = "-- Select Customer --";
+            select.appendChild(placeholder);
+
+            data.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = `${c.name} (${c.phone})`;
+                select.appendChild(opt);
+            });
+        }
+
+        async function loadProducts() {
+            const res = await fetch('/products/');
+            const data = await res.json();
+            const select = document.getElementById('invoiceProduct');
+            select.innerHTML = '';
+            window.products = {}; // Cache for name lookup
+            data.forEach(p => {
+                window.products[p.id] = p;
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.textContent = `${p.name} - $${p.price}`;
+                select.appendChild(opt);
+            });
+        }
+
+        async function loadInvoices() {
+            const res = await fetch('/invoices/');
+            const data = await res.json();
+            const list = document.getElementById('invoiceList');
+            list.innerHTML = '';
+            data.forEach(inv => {
+                const li = document.createElement('li');
+                li.innerHTML = `Invoice #${inv.id} - ${inv.customer.name} - $${inv.total_amount}
+                    <a href="/invoices/${inv.id}/pdf" target="_blank">Download PDF</a>
+                    <button onclick="sendWhatsApp(${inv.id})">Send WhatsApp</button>
+                `;
+                list.appendChild(li);
+            });
+        }
+
+        // Event Listeners
+        document.getElementById('customerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('custName').value;
+            const phone = document.getElementById('custPhone').value;
+            await fetch('/customers/', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, phone})
+            });
+            alert('Customer Added');
+            loadCustomers();
+        });
+
+        document.getElementById('productForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('prodName').value;
+            const price = document.getElementById('prodPrice').value;
+            await fetch('/products/', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, price})
+            });
+            alert('Product Added');
+            loadProducts();
+        });
+
+        // Invoice Items Management
+        let currentItems = [];
+
+        window.addItem = function() {
+            const prodId = document.getElementById('invoiceProduct').value;
+            const qty = document.getElementById('invoiceQty').value;
+            if(!prodId) return;
+
+            const prod = window.products[prodId];
+
+            currentItems.push({product_id: parseInt(prodId), quantity: parseInt(qty), name: prod.name});
+            renderItems();
+        }
+
+        function renderItems() {
+            const tbody = document.querySelector('#itemsTable tbody');
+            tbody.innerHTML = '';
+            currentItems.forEach((item, index) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${item.product_id}</td>
+                    <td>${item.name}</td>
+                    <td>${item.quantity}</td>
+                    <td><button onclick="removeItem(${index})" style="background:red; padding:5px;">X</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        window.removeItem = function(index) {
+            currentItems.splice(index, 1);
+            renderItems();
+        }
+
+        document.getElementById('invoiceForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const customerId = document.getElementById('invoiceCustomer').value;
+            const paymentMethod = document.getElementById('paymentMethod').value;
+
+            if(!customerId || currentItems.length === 0) {
+                alert('Please select customer and add items');
+                return;
+            }
+
+            const res = await fetch('/invoices/', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    customer_id: parseInt(customerId),
+                    payment_method: paymentMethod,
+                    items: currentItems.map(i => ({product_id: i.product_id, quantity: i.quantity}))
+                })
+            });
+
+            if(res.ok) {
+                alert('Invoice Generated!');
+                currentItems = [];
+                renderItems();
+                loadInvoices();
+            } else {
+                alert('Error generating invoice');
+            }
+        });
+
+        window.sendWhatsApp = async function(invoiceId) {
+            const res = await fetch(`/invoices/${invoiceId}/send_whatsapp`, {
+                method: 'POST'
+            });
+            const data = await res.json();
+            alert(data.message);
+        }
+
+        // Init
+        loadCustomers();
+        loadProducts();
+        loadInvoices();
+    </script>
+</body>
+</html>
